@@ -166,7 +166,7 @@ const TOOLS: ToolDef<z.ZodTypeAny>[] = [
   tool({
     name: "list_market_signals",
     description:
-      "Search for high-signal real estate investment opportunities (teardowns, flips). Use this to find properties before diving into specific details.",
+      "Search for high-signal real estate investment opportunities (teardowns, flips). Use this to find properties before diving into specific details. Each result carries proformaROI, a net teardown ROI percentage, plus a proforma object holding the inputs behind it (build size, ARV per sqft, capital, resale net of selling cost) and an assumptions block. It is deterministic arithmetic, the same calculation the public property page shows, so it can be quoted and reproduced. Always state the assumptions with it: $400/sqft build cost, 5% cost of sale, build sized to the zoning envelope. proformaROI is null when a listing cannot be modelled, with unmodellableReason saying which input was missing; treat null as unknown and never substitute a default. Most of this market does not pencil, so a negative value is the normal answer rather than an error.",
     inputSchema: {
       type: "object",
       properties: {
@@ -188,7 +188,7 @@ const TOOLS: ToolDef<z.ZodTypeAny>[] = [
   tool({
     name: "get_property_intelligence",
     description:
-      "Get detailed AI intelligence for a specific property. Returns teardown probabilities, flippability scores, comparable sales, and a developerROI field. Takes an id from list_market_signals. Treat developerROI as an AI screening estimate for ranking only, not as underwriting: it is a model output rather than arithmetic, and it disagrees materially with a build-to-zoning proforma on much of the inventory. Do not quote it as an expected return.",
+      "Get detailed AI intelligence for a specific property. Takes an id from list_market_signals. Returns teardown and flippability scores, a market heat index, an AI briefing, comparable-sale counts with an average price per sqft, and parcel enrichment (zoning, lot size, development class). Those scores rank candidates; none of them is a return. This endpoint carries no ROI figure at all: for that, read proformaROI from list_market_signals, which is arithmetic rather than a model estimate.",
     inputSchema: {
       type: "object",
       properties: {
