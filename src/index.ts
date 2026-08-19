@@ -166,7 +166,7 @@ const TOOLS: ToolDef<z.ZodTypeAny>[] = [
   tool({
     name: "list_market_signals",
     description:
-      "Search for high-signal real estate investment opportunities (teardowns, flips). Use this to find properties before diving into specific details.",
+      "Search for high-signal real estate investment opportunities (teardowns, flips). Use this to find properties before diving into specific details. Each result carries proformaROI, a net teardown ROI computed by arithmetic rather than by a model, with a proforma object holding its inputs and assumptions ($400/sqft build, 5% cost of sale, build sized to the zoning envelope). Quote those assumptions alongside the number. null means not modellable, with unmodellableReason naming the missing input: treat it as unknown, never as zero. Negatives are normal here; most of this market does not pencil.",
     inputSchema: {
       type: "object",
       properties: {
@@ -188,7 +188,7 @@ const TOOLS: ToolDef<z.ZodTypeAny>[] = [
   tool({
     name: "get_property_intelligence",
     description:
-      "Get detailed AI intelligence for a specific property. Returns teardown probabilities, flippability scores, comparable sales, and a developerROI field. Takes an id from list_market_signals. Treat developerROI as an AI screening estimate for ranking only, not as underwriting: it is a model output rather than arithmetic, and it disagrees materially with a build-to-zoning proforma on much of the inventory. Do not quote it as an expected return.",
+      "Get detailed AI intelligence for a specific property. Takes an id from list_market_signals. Returns teardown and flippability scores, a market heat index, an AI briefing, comparable-sale counts with an average price per sqft, and parcel enrichment (zoning, lot size, development class). Those scores rank candidates; none of them is a return. This endpoint carries no ROI figure at all: for that, read proformaROI from list_market_signals, which is arithmetic rather than a model estimate.",
     inputSchema: {
       type: "object",
       properties: {
