@@ -86,16 +86,36 @@ jobs:
             console.log(`server.json agrees at ${pkg}`);
           '
 
-      - name: Refuse to republish an existing version
+      # A version already on npm means two different things depending on how we
+      # got here, and conflating them is what broke the first catch-up run:
+      #
+      #   tag push        -> you tagged a version that already shipped. A mistake.
+      #                      Fail, because the npm registry cannot be rolled back.
+      #   workflow_dispatch -> deliberate re-run, almost always to push server.json
+      #                      to the MCP registry after npm was already done. Skip
+      #                      the npm step and carry on.
+      #
+      # The original guard failed the whole job either way, which killed the
+      # registry steps below before they could run.
+      - name: Decide whether npm needs publishing
+        id: npmstate
         run: |
           PKG="$(node -p "require('./package.json').version")"
           if npm view "addressintel-mcp@$PKG" version >/dev/null 2>&1; then
-            echo "addressintel-mcp@$PKG is already published; bump the version" >&2
-            exit 1
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "needed=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::addressintel-mcp@$PKG is already on npm; skipping npm publish and continuing to the MCP registry"
+            else
+              echo "addressintel-mcp@$PKG is already published; bump the version" >&2
+              exit 1
+            fi
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "$PKG is not yet on npm"
           fi
-          echo "$PKG is not yet on the registry"
 
-      - run: npm publish --provenance --access public
+      - if: steps.npmstate.outputs.needed == 'true'
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -150,13 +170,19 @@ jobs:
       # The check that would have caught this in the first place. It asks the
       # registry what it is actually serving, rather than trusting that the
       # publish command did what it said.
+      #
+      # Note the shape: the v0 API returns {"servers":[{"server":{...},
+      # "_meta":{...}}]}. The fields live under .server, NOT at the top of each
+      # array element. Querying .servers[].name silently yields null, which
+      # reads as "absent" and is how the first version of this check reported a
+      # false negative.
       - name: Registry must now serve this version
         if: ${{ env.MCP_KEY != '' }}
         run: |
           PKG="$(node -p "require('./package.json').version")"
           for i in 1 2 3 4 5; do
             LIVE="$(curl -fsSL 'https://registry.modelcontextprotocol.io/v0/servers?search=addressintel' \
-              | jq -r '[.servers[]? | select(.name=="co.addressintel/permits")] | last | .version // empty')"
+              | jq -r '[.servers[]?.server | select(.name=="co.addressintel/permits")] | last | .version // empty')"
             [ "$LIVE" = "$PKG" ] && { echo "registry serves $LIVE"; exit 0; }
             echo "registry serves '${LIVE:-nothing}', want $PKG (attempt $i)"
             sleep 10
@@ -191,7 +217,7 @@ jobs:
         run: |
           PKG="$(node -p "require('./package.json').version")"
           LIVE="$(curl -fsSL 'https://registry.modelcontextprotocol.io/v0/servers?search=addressintel' \
-            | jq -r '[.servers[]? | select(.name=="co.addressintel/permits")] | last | .version // empty')"
+            | jq -r '[.servers[]?.server | select(.name=="co.addressintel/permits")] | last | .version // empty')"
           echo "package.json: $PKG"
           echo "registry:     ${LIVE:-<absent>}"
           if [ "$LIVE" != "$PKG" ]; then
