@@ -208,8 +208,13 @@ jobs:
   # be edited or rolled back out from under us, and a release cut before this
   # workflow existed leaves them apart with nothing to notice. Runs weekly and
   # on demand, and simply asks whether the two agree.
+  # Schedule ONLY. On workflow_dispatch this used to run alongside `publish`
+  # and read the registry before the publish had landed, so a successful
+  # catch-up run still reported failure. Manual verification is the publish
+  # job's own "Registry must now serve this version" step; this job exists for
+  # the days when nothing is released at all.
   registry-drift:
-    if: github.event_name != 'push'
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
