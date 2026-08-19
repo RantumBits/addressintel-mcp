@@ -1,6 +1,6 @@
 {
   "name": "addressintel-mcp",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "MCP server for SF Peninsula building-permit and parcel-buildability data: search permits, SB 9 inventory, ADU and redevelopment leads.",
   "mcpName": "co.addressintel/permits",
   "keywords": [
