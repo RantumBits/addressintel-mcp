@@ -1,0 +1,92 @@
+name: Publish
+
+# Publishes to npm from CI using a granular access token stored as the
+# NPM_TOKEN repository secret. The token never touches a developer machine: it
+# goes from npmjs.com straight into GitHub's secret store, and only this
+# workflow reads it.
+#
+# ONE-TIME SETUP, both steps outside this repo:
+#
+# 1. npmjs.com -> Access Tokens -> Generate New Token -> Granular Access Token
+#      Packages:    select addressintel-mcp (not "all packages")
+#      Permissions: Read and write
+#      Bypass 2FA:  ENABLE. Without it the publish fails exactly the way an
+#                   interactive `npm publish` does, because this account runs
+#                   2FA in auth-and-writes mode.
+#      Expiry:      set one, and expect to rotate. A token that never expires
+#                   is a credential nobody remembers owning.
+#
+# 2. GitHub -> this repo -> Settings -> Secrets and variables -> Actions ->
+#    New repository secret, named exactly NPM_TOKEN.
+#
+# Releasing: bump the version (package.json, package-lock.json AND both fields
+# in server.json), commit, then push a matching tag:
+#   git tag v1.1.2 && git push origin v1.1.2
+# The guards below refuse to publish on a version mismatch, because the
+# registry does not let you take a bad publish back.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Not for authentication (the token does that). This lets npm attach a
+      # provenance attestation, so the package can be traced to the commit and
+      # workflow that built it.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: Tag must match package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag v$TAG does not match package.json $PKG" >&2
+            exit 1
+          fi
+          echo "version $PKG confirmed"
+
+      # server.json is what the MCP registries read. If it drifts from
+      # package.json the directories advertise a version npm does not serve.
+      - name: server.json must match package.json
+        run: |
+          node -e '
+            const s = require("./server.json");
+            const pkg = require("./package.json").version;
+            const found = [s.version, ...(s.packages ?? []).map(p => p.version)];
+            if (found.some(v => v !== pkg)) {
+              console.error(`server.json has ${JSON.stringify(found)}, package.json has ${pkg}`);
+              process.exit(1);
+            }
+            console.log(`server.json agrees at ${pkg}`);
+          '
+
+      - name: Refuse to republish an existing version
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          if npm view "addressintel-mcp@$PKG" version >/dev/null 2>&1; then
+            echo "addressintel-mcp@$PKG is already published; bump the version" >&2
+            exit 1
+          fi
+          echo "$PKG is not yet on the registry"
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
