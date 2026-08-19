@@ -29,10 +29,18 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+  # Weekly drift check only. The publish job below excludes this trigger.
+  schedule:
+    - cron: '17 14 * * 1'
 
 jobs:
   publish:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # Hoisted to the job so the `if:` on the registry steps can read it. A
+    # step's own `env:` is not in scope for that step's own `if:`.
+    env:
+      MCP_KEY: ${{ secrets.MCP_REGISTRY_DNS_KEY }}
     permissions:
       contents: read
       # Not for authentication (the token does that). This lets npm attach a
@@ -90,3 +98,103 @@ jobs:
       - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ---------------------------------------------------------------------
+      # Publishing to npm is only half of a release. The MCP registry holds its
+      # own copy of server.json, and every directory that lists this server
+      # (PulseMCP, Glama, mcp.so) reads the REGISTRY, not npm.
+      #
+      # Until 2026-08-19 this workflow stopped at the line above. The registry
+      # entry was created by hand on 2026-08-07 at 1.1.1 and never moved again,
+      # so 1.1.2 shipped to npm and the whole directory ecosystem kept
+      # advertising 1.1.1. The guard above catches server.json drifting from
+      # package.json inside this repo; nothing caught the registry copy
+      # drifting from both.
+      #
+      # ONE-TIME SETUP, outside this repo. The namespace `co.addressintel/*` is
+      # DNS-authenticated, so publishing proves control of addressintel.co:
+      #
+      #   1. Generate an ed25519 keypair:
+      #        openssl genpkey -algorithm ed25519 -out key.pem
+      #        openssl pkey -in key.pem -noout -text   # note the private hex
+      #   2. Run `mcp-publisher login dns --domain=addressintel.co \
+      #        --private-key=<64 hex chars>` once locally. It PRINTS the exact
+      #      TXT record to add, of the form:  v=MCPv1; k=ed25519; p=<base64>
+      #   3. Add that TXT record at the apex of addressintel.co and wait for it
+      #      to resolve.
+      #   4. GitHub -> this repo -> Settings -> Secrets and variables ->
+      #      Actions -> new secret named exactly MCP_REGISTRY_DNS_KEY, holding
+      #      the 64-character private hex.
+      #
+      # Until that secret exists the step below is skipped, loudly, rather than
+      # failing the release: an npm publish that already succeeded must not be
+      # reported as a failure.
+      # ---------------------------------------------------------------------
+      - name: Install mcp-publisher
+        if: ${{ env.MCP_KEY != '' }}
+        run: |
+          VER="$(curl -fsSL https://api.github.com/repos/modelcontextprotocol/registry/releases/latest | jq -r .tag_name)"
+          curl -fsSL -o publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${VER}/mcp-publisher_linux_amd64.tar.gz"
+          tar -xzf publisher.tar.gz mcp-publisher
+          sudo install -m 0755 mcp-publisher /usr/local/bin/mcp-publisher
+          mcp-publisher --help >/dev/null
+          echo "mcp-publisher ${VER} installed"
+
+      - name: Publish server.json to the MCP registry
+        if: ${{ env.MCP_KEY != '' }}
+        run: |
+          mcp-publisher login dns --domain=addressintel.co --private-key="$MCP_KEY"
+          mcp-publisher publish
+
+      # The check that would have caught this in the first place. It asks the
+      # registry what it is actually serving, rather than trusting that the
+      # publish command did what it said.
+      - name: Registry must now serve this version
+        if: ${{ env.MCP_KEY != '' }}
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          for i in 1 2 3 4 5; do
+            LIVE="$(curl -fsSL 'https://registry.modelcontextprotocol.io/v0/servers?search=addressintel' \
+              | jq -r '[.servers[]? | select(.name=="co.addressintel/permits")] | last | .version // empty')"
+            [ "$LIVE" = "$PKG" ] && { echo "registry serves $LIVE"; exit 0; }
+            echo "registry serves '${LIVE:-nothing}', want $PKG (attempt $i)"
+            sleep 10
+          done
+          echo "registry did not converge on $PKG" >&2
+          exit 1
+
+      - name: Warn when the registry step was skipped
+        if: ${{ env.MCP_KEY == '' }}
+        run: |
+          {
+            echo "### npm published, MCP registry NOT updated"
+            echo
+            echo "\`MCP_REGISTRY_DNS_KEY\` is not set, so \`server.json\` was not pushed to the"
+            echo "MCP registry. Every directory that lists this server reads the registry, so"
+            echo "they will keep advertising whatever version was published there last."
+            echo
+            echo "See the one-time setup comment in \`.github/workflows/publish.yml\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::MCP registry not updated - MCP_REGISTRY_DNS_KEY is unset"
+
+  # A release is not the only way these can drift: the registry entry can also
+  # be edited or rolled back out from under us, and a release cut before this
+  # workflow existed leaves them apart with nothing to notice. Runs weekly and
+  # on demand, and simply asks whether the two agree.
+  registry-drift:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare registry version to package.json
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          LIVE="$(curl -fsSL 'https://registry.modelcontextprotocol.io/v0/servers?search=addressintel' \
+            | jq -r '[.servers[]? | select(.name=="co.addressintel/permits")] | last | .version // empty')"
+          echo "package.json: $PKG"
+          echo "registry:     ${LIVE:-<absent>}"
+          if [ "$LIVE" != "$PKG" ]; then
+            echo "::error::MCP registry serves '${LIVE:-nothing}' but this repo is at $PKG"
+            exit 1
+          fi
