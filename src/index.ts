@@ -166,7 +166,7 @@ const TOOLS: ToolDef<z.ZodTypeAny>[] = [
   tool({
     name: "list_market_signals",
     description:
-      "Search for high-signal real estate investment opportunities (teardowns, flips). Use this to find properties before diving into specific details. Each result carries proformaROI, a net teardown ROI percentage, plus a proforma object holding the inputs behind it (build size, ARV per sqft, capital, resale net of selling cost) and an assumptions block. It is deterministic arithmetic, the same calculation the public property page shows, so it can be quoted and reproduced. Always state the assumptions with it: $400/sqft build cost, 5% cost of sale, build sized to the zoning envelope. proformaROI is null when a listing cannot be modelled, with unmodellableReason saying which input was missing; treat null as unknown and never substitute a default. Most of this market does not pencil, so a negative value is the normal answer rather than an error.",
+      "Search for high-signal real estate investment opportunities (teardowns, flips). Use this to find properties before diving into specific details. Each result carries proformaROI, a net teardown ROI computed by arithmetic rather than by a model, with a proforma object holding its inputs and assumptions ($400/sqft build, 5% cost of sale, build sized to the zoning envelope). Quote those assumptions alongside the number. null means not modellable, with unmodellableReason naming the missing input: treat it as unknown, never as zero. Negatives are normal here; most of this market does not pencil.",
     inputSchema: {
       type: "object",
       properties: {
